@@ -10,11 +10,10 @@ from packaging.version import Version
 
 
 PYTHON_VERSION = Version("3.11")
-REQUIREMENTS_FILE = "requirements.txt"
 
 
 def get_release_info(package, version):
-    """Fetch information about an exact package release from PyPI."""
+    """Fetch exact release information from PyPI."""
 
     url = (
         f"https://pypi.org/pypi/"
@@ -41,35 +40,39 @@ def get_release_info(package, version):
 
 
 def get_minimum_python(requires_python):
-    """
-    Extract the strongest lower bound from Requires-Python.
-    Returns (minimum version, operator).
-    """
+    """Find the highest lower bound in Requires-Python."""
 
     specifiers = SpecifierSet(requires_python)
-
     lower_bounds = []
 
     for spec in specifiers:
         if spec.operator in (">=", ">", "~="):
-            lower_bounds.append(
-                (Version(spec.version), spec.operator)
-            )
+            lower_bounds.append(Version(spec.version))
 
         elif spec.operator == "==" and "*" not in spec.version:
-            lower_bounds.append(
-                (Version(spec.version), "==")
-            )
+            lower_bounds.append(Version(spec.version))
 
     if not lower_bounds:
         return None
 
-    return max(lower_bounds, key=lambda item: item[0])
+    return max(lower_bounds)
 
 
 def check_requirements():
-    with open(REQUIREMENTS_FILE, "r", encoding="utf-8") as file:
-        lines = file.readlines()
+
+    # Take dependencies directly from terminal.
+    print("Enter dependencies (one per line).")
+    print("Type END when you have finished:\n")
+
+    lines = []
+
+    while True:
+        line = input()
+
+        if line.strip().upper() == "END":
+            break
+
+        lines.append(line)
 
     not_found = []
     incompatible = []
@@ -91,7 +94,7 @@ def check_requirements():
 
             package = requirement.name
 
-            # We expect exact version pins such as package==1.2.3
+            # Extract exact version pin.
             pins = [
                 spec for spec in requirement.specifier
                 if spec.operator == "=="
@@ -104,97 +107,92 @@ def check_requirements():
             version = pins[0].version
 
         except Exception as error:
-            invalid_lines.append((line_number, line, str(error)))
+            invalid_lines.append(
+                (line_number, line, str(error))
+            )
             continue
 
         requires_python, error = get_release_info(package, version)
 
-        # Package or pinned release does not exist.
+        # Package or exact release does not exist.
         if error == "not_found":
             not_found.append(f"{package}=={version}")
             continue
 
-        # Do not mistake network errors for missing packages.
+        # Network/API errors.
         if error:
             network_errors.append(
                 f"{package}=={version}: {error}"
             )
             continue
 
-        # No Requires-Python means compatible, as requested.
+        # Missing Requires-Python means compatible.
         if not requires_python:
             continue
 
         try:
             specifiers = SpecifierSet(requires_python)
 
-            # Check whether Python 3.11 satisfies the constraint.
-            if not specifiers.contains(PYTHON_VERSION, prereleases=True):
+            # Check Python 3.11 compatibility.
+            if not specifiers.contains(
+                PYTHON_VERSION, prereleases=True
+            ):
                 incompatible.append(
                     f"{package}=={version} "
                     f"(Requires-Python: {requires_python})"
                 )
 
-            # Find the release with the highest minimum Python version.
+            # Find the highest minimum Python requirement.
             minimum = get_minimum_python(requires_python)
 
             if minimum is not None:
-                minimum_version, operator = minimum
-
                 if (
                     highest_requirement is None
-                    or minimum_version > highest_requirement[0]
+                    or minimum > highest_requirement[0]
                 ):
                     highest_requirement = (
-                        minimum_version,
+                        minimum,
                         package,
-                        version,
-                        operator
+                        version
                     )
 
         except Exception as error:
             invalid_lines.append(
-                (line_number, line, f"Invalid Requires-Python: {error}")
+                (line_number, line,
+                 f"Invalid Requires-Python: {error}")
             )
 
-    # Print results.
+    # Display report.
     print("\n========== PyPI DEPENDENCY REPORT ==========\n")
 
     print(f"Dependencies checked: {len(lines)}")
 
-    print("\nNot found on PyPI:")
-    if not_found:
-        for item in not_found:
-            print(f"  - {item}")
-    else:
-        print("  None")
+    print(f"Not found on PyPI: {len(not_found)}")
+    print(f"Incompatible with Python 3.11: {len(incompatible)}")
 
-    print("\nIncompatible with Python 3.11:")
-    if incompatible:
-        for item in incompatible:
-            print(f"  - {item}")
-    else:
-        print("  None")
 
     print("\nHighest requirement:")
+
     if highest_requirement:
-        minimum, package, version, operator = highest_requirement
+        minimum, package, version = highest_requirement
+
         print(
-            f"  {package}=={version}"
-            f"({operator}{minimum})"
+            f"  {package}=={version}(>={minimum})"
         )
     else:
         print("  No minimum Python requirement found.")
 
     if invalid_lines:
         print("\nInvalid requirements:")
+
         for number, line, reason in invalid_lines:
             print(f"  Line {number}: {line} ({reason})")
 
     if network_errors:
         print("\nCould not check (network/API errors):")
+
         for item in network_errors:
-            print(f"  - {item}")
+            print("  -", item)
 
     print("\n============================================")
 
